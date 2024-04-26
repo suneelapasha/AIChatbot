@@ -1,7 +1,9 @@
 import OpenAI from "openai";
-import fetch from "node-fetch";
+import express from "express";
+import cors from "cors";
+import fs from "fs";
 import dotenv from "dotenv";
-import readlineSync from "readline-sync";
+
 dotenv.config();
 
 // Open AI configuration
@@ -10,151 +12,154 @@ const openai = new OpenAI({
   });
 
 
-const MODEL_ENGINE = "gpt-4-turbo-preview"
-let messages = [
-{ role: "system", content: "You are a professional assistant?" },
-];
+const app = express();
+const port = 4000;
 
-function getInput(promptMessage) {
-return readlineSync.question(promptMessage, {
-    hideEchoBack: false, // The typed characters won't be displayed if set to true
-});
-}
-  
-function kelvinToCelsius(kelvin) {
-return JSON.stringify(Math.round(kelvin - 273.15));
-}
-  
-function geoCode(location) {
-return new Promise(async (resolve, reject) => {
-    try {
-    const coordinates = await fetch(
-        `http://api.openweathermap.org/geo/1.0/direct?q=${location}&appid=${process.env.WEATHER_API_KEY}`,
-    );
-    const json = await coordinates.json();
-    const lat = json[0]?.lat;
-    const lon = json[0]?.lon;
-    resolve({ lat, lon });
-    } catch (err) {
-    console.log(err);
-    }
-});
-}
-  
-// Example dummy function hard coded to return the same weather
-// In production, this could be your backend API or an external API
-async function getCurrentWeather(location, unit) {
-    console.log(location);
-const loc = location.split(",")[0];
-const { lat, lon } = await geoCode(loc);
-const response = await fetch(
-    `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${process.env.WEATHER_API_KEY}`,
-);
-const json = await response.json();
-const currentTemp = json.main.temp;
-const description = json.weather[0].description;
+app.use(express.json());
+app.use(cors());
+app.use(express.urlencoded({ extended: true }));
 
-const weatherInfo = {
-    location: location,
-    temperature: kelvinToCelsius(currentTemp),
-    unit: unit,
-    forecast: description,
-};
-return JSON.stringify(weatherInfo);
-}
-  
-async function runConversation(messages) {
-const tools = [
-    {
-    type: "function",
-    function: {
-        name: "get_current_weather",
-        description: "Get the current weather in a given location",
-        parameters: {
-        type: "object",
-        properties: {
-            location: {
-            type: "string",
-            description: "The city and state, e.g. San Francisco, CA",
-            },
-            unit: { type: "string", enum: ["celsius", "fahrenheit"] },
-        },
-        required: ["location"],
-        },
-    },
-    },
-];
+const LANGUAGE_MODEL = "gpt-3.5-turbo-1106";
+const MODEL_ENGINE = "gpt-4-turbo-preview";
+const ASSISTANT_NAME = "Math Tutor";
+const ASSISTANT_DEFAULT_INSTRUCTIONS =
+  "You are a personal math tutor. Write and run code to answer math questions.";
 
-try {
-    const response = await openai.chat.completions.create({
+async function moderateConversation(req, res) {
+  const moderation = await openai.moderations.create({ input: req.body.input });
+  console.log("categories", moderation.results[0].categories);  
+  console.log("category_scores", moderation.results[0].category_scores);  
+  res.status(200).send(moderation.results[0].flagged);
+}
+async function uploadToOpenAI(filepath) {
+  try {
+    // Upload a file with an "assistants" purpose
+    const file = await openai.files.create({
+      file: fs.createReadStream(filepath),
+      purpose: "assistants",
+    });
+    console.log(file);
+    console.log(file.id);
+    return file.id;
+  } catch (error) {
+    console.error("Error uploading file:", error);
+  }
+}
+
+// Step 1: Create an Assistant
+const createAssistant = async (file_id) => {
+  return await openai.beta.assistants.create({
+    name: ASSISTANT_NAME,
+    instructions: ASSISTANT_DEFAULT_INSTRUCTIONS,
+    tools: [{ type: "retrieval" }],
     model: MODEL_ENGINE,
-    messages: messages,
-    tools: tools,
-    tool_choice: "auto", // auto is default, but we'll be explicit
-    });
-    const responseMessage = response.choices[0].message;
-    // Step 2: check if the model wanted to call a function
-    const toolCalls = responseMessage.tool_calls;
-    if (!responseMessage.tool_calls) {
-    return response;
-    }
-    // Step 3: call the function
-    // Note: the JSON response may not always be valid; be sure to handle errors
-    const availableFunctions = {
-    get_current_weather: getCurrentWeather,
-    };
-
-    // Step 4: add message to the conversation
-    messages.push(responseMessage);
-
-    for (const toolCall of toolCalls) {
-    const functionName = toolCall.function.name;
-    const functionToCall = availableFunctions[functionName];
-    const functionArgs = JSON.parse(toolCall.function.arguments);
-    const functionResponse = await functionToCall(
-        functionArgs.location,
-        functionArgs.unit,
-    );
-    // Step 5: add extended response to the conversation
-    messages.push({
-        tool_call_id: toolCall.id,
-        role: "tool",
-        name: functionName,
-        content: functionResponse,
-    });
-    // Step 6: generates an extended response
-    try {
-        const secondResponse = await openai.chat.completions.create({
-        model: "gpt-4-turbo-preview",
-        messages: messages,
-        });
-        return secondResponse;
-    } catch (e) {
-        console.error(e);
-    }
-    }
-} catch (e) {
-    console.error(e);
-}
-}
-
-const start = async () => {
-console.log("\n\n----------------------------------");
-console.log("          CHAT WITH AI 🤖   ");
-console.log("----------------------------------\n");
-console.log("\nBot: How can I help you?");
-
-while (true) {
-    const input = getInput("You: ");
-    if (input === "x") {
-    console.log("Goodbye!");
-    process.exit();
-    }
-    messages.push({ role: "user", content: input });
-    const response = await runConversation(messages);
-    console.log("Bot: ", response.choices[0].message.content);
-}
+    file_ids: [file_id],
+  });
 };
-  
-start();
-  
+
+// Step 2: Create a Thread
+const createThread = async () => {
+  return await openai.beta.threads.create();
+};
+
+// Step 3: Add a Message to a Thread
+const addMessageToThread = async (thread, user_input) => {
+  try {
+    const message = await openai.beta.threads.messages.create(thread.id, {
+      role: "user",
+      content: user_input,
+    });
+    return message;
+  } catch (error) {
+    console;
+  }
+};
+
+// Step 4: Run the Assistant
+const runThread = async (assistant, thread) => {
+  try {
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: assistant.id,
+      instructions: "Please address the user as Rok Benko.",
+    });
+    console.log("This is the run object: ", run, "\n");
+
+    return run;
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+// Step 5: Check the Run Status
+const checkRunStatus = async (run, thread) => {
+  try {
+    const _run = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    console.log("This is the run status: ", _run.status, "\n");
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+// Step 6: Retrieve and display the Messages
+const retrieveMessages = async (run, thread) => {
+  if (run.status === "completed") {
+    console.log("This is the run status: ", run.status, "\n");
+    const messages = await openai.beta.threads.messages.list(thread.id);
+
+    // display messages
+
+    if (messages.data[0].content[0].text) {
+      return messages.data[0].content[0].text.value;
+    }
+  }
+};
+
+let assistant, thread;
+
+async function main(_, res) {
+  // Step 0: Create a File
+  const file_id = await uploadToOpenAI("files/faq_abc.txt");
+
+  // Step 1: Create an Assistant
+  assistant = await createAssistant(file_id);
+  // Step 2: Create a Thread
+  thread = await createThread();
+  res.status(200).send(thread);
+}
+
+async function sendMessage(req, res) {
+  const message = await addMessageToThread(thread, req.body.input);
+  console.log("user: ", message.content[message.content.length - 1].text.value);
+
+  // Step 4: Run the Assistant
+  let run = await runThread(assistant, thread);
+
+  // Step 5: Check the Run Status
+  while (run.status !== "completed") {
+    await checkRunStatus(run, thread);
+    // Re-fetch the run status inside the loop
+    run = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+
+    if (run.status === "failed" || run.status === "expired") {
+      console.log("Chat terminated.");
+      // process.exit();
+    }
+  }
+  // Step 6: Retrieve and display the Messages
+  const messages = await retrieveMessages(run, thread);
+  console.log(messages);
+  res.status(200).send({
+    sender: "ai_assistant",
+    content: messages,
+    flagged: false,
+    timestamp: new Date(),
+  });
+}
+
+app.get("/", main);
+app.post("/sendMessage", sendMessage);
+app.post("/moderate", moderateConversation);
+
+app.listen(port, () => {
+  console.log(`server running on http://localhost:${port}`);
+});

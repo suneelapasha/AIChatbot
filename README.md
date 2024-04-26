@@ -19,6 +19,30 @@ AI-powered chatbot with Node.js
 
 OPENAI_API_KEY=...
 
+
+## [Postman](https://www.postman.com/downloads/)
+Postman is an API platform for building and using APIs. 
+
+- use [web version](https://web.postman.co/home)
+
+## [get an key](https://platform.openai.com/account/api-keys)
+
+.env file
+
+POSTMAN_API_KEY=...
+
+## Installation :
+`npm install`
+
 ## Start:
 
 `npm start`
+
+## Send API REQUEST:
+```
+curl -X POST http://localhost:4000/sendMessage \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input": "what are the opening hours ?",
+  }'
+```
