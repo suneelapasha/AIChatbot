@@ -51,9 +51,8 @@ const createAssistant = async (file_id) => {
   return await openai.beta.assistants.create({
     name: ASSISTANT_NAME,
     instructions: ASSISTANT_DEFAULT_INSTRUCTIONS,
-    tools: [{ type: "retrieval" }],
+    tools: [{ type: "code_interpreter" }],
     model: MODEL_ENGINE,
-    file_ids: [file_id],
   });
 };
 
