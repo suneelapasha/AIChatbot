@@ -106,7 +106,7 @@ function App() {
       setGenerating(false);
     })
     .catch((error) => {
-        console.error("Error:", error); // Handle the error
+        console.error("Error:", error);
     });
   }
 
